@@ -121,7 +121,14 @@ jobs:
           mkdir build
           cd build
           cmake .. -DDEP_WX_GTK3=ON
-          make -j$(nproc)
+          
+          echo "=== Starting make with verbose output ==="
+          make -j$(nproc) VERBOSE=1 || {
+            echo "=== Build failed, checking for specific errors ==="
+            echo "=== Last 100 lines of failed build ==="
+            make -j1 2>&1 | tail -100
+            exit 1
+          }
           echo "=== Dependencies build completed ==="
           
       - name: Build PrusaSlicer with static dependencies
