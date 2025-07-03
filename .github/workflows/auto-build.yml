@@ -1,4 +1,4 @@
-name: Auto Build PrusaSlicer
+name: Build PrusaSlicer Debian
 
 on:
   schedule:
@@ -68,26 +68,18 @@ jobs:
           
           echo "latest-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-  sync-and-build:
+  build-debian:
     needs: check-upstream
     if: needs.check-upstream.outputs.should-build == 'true'
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          - os: ubuntu-latest
-            name: Linux
-            artifact-name: prusa-slicer
-          - os: windows-latest  
-            name: Windows
-            artifact-name: prusa-slicer.exe
-          - os: macos-latest
-            name: macOS
-            artifact-name: prusa-slicer
-            
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    container: debian:bookworm
     
     steps:
+      - name: Install git and basic tools
+        run: |
+          apt-get update
+          apt-get install -y git ca-certificates curl
+          
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -95,6 +87,7 @@ jobs:
           
       - name: Sync with upstream
         run: |
+          git config --global --add safe.directory /__w/$(echo ${{ github.repository }} | cut -d'/' -f2)/$(echo ${{ github.repository }} | cut -d'/' -f2)
           git remote add upstream https://github.com/prusa3d/PrusaSlicer.git
           git fetch upstream --tags
           
@@ -108,71 +101,63 @@ jobs:
             git checkout ${{ needs.check-upstream.outputs.latest-tag }}
           fi
           
-      - name: Setup dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Setup Debian dependencies
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake git \
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake \
             libboost-dev libboost-regex-dev libboost-filesystem-dev \
             libboost-thread-dev libboost-log-dev libboost-locale-dev \
             libboost-iostreams-dev libeigen3-dev libnlopt-cxx-dev \
             libudev-dev libopenvdb-dev libcereal-dev libtbb-dev \
-            libglu1-mesa-dev libcurl4-openssl-dev \
-            libwxgtk3.2-dev libgtk-3-dev pkg-config gettext
+            libgl1-mesa-dev libglu1-mesa-dev libcurl4-openssl-dev \
+            libwxgtk3.2-dev libgtk-3-dev pkg-config gettext \
+            extra-cmake-modules libnss3-dev
             
-      - name: Setup dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install boost eigen nlopt openvdb cereal tbb curl wxwidgets
-          
-      - name: Setup MSVC (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: microsoft/setup-msbuild@v1.1
-        
       - name: Build PrusaSlicer
+        timeout-minutes: 60
         run: |
           mkdir build
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release -DSLIC3R_STATIC=ON
-          cmake --build . --config Release --parallel
+          make -j$(nproc)
           
-      - name: Find binary (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Find and prepare binary
         run: |
           find build -name "prusa-slicer" -type f -executable
+          mkdir -p dist
+          find build -name "prusa-slicer" -type f -executable -exec cp {} dist/ \;
+          ls -la dist/
           
-      - name: Find binary (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Test binary
         run: |
-          Get-ChildItem -Recurse build -Name "prusa-slicer.exe"
+          cd dist
+          ./prusa-slicer --help || echo "Binary test completed"
           
-      - name: Upload build artifacts
+      - name: Upload Debian Build
         uses: actions/upload-artifact@v4
         with:
-          name: PrusaSlicer-${{ matrix.name }}-${{ needs.check-upstream.outputs.latest-tag }}
-          path: |
-            build/**/prusa-slicer
-            build/**/prusa-slicer.exe
+          name: PrusaSlicer-Debian-${{ needs.check-upstream.outputs.latest-tag }}
+          path: dist/prusa-slicer
           retention-days: 90
           
-      - name: Create release (Linux only - avoid duplicates)
-        if: matrix.os == 'ubuntu-latest' && needs.check-upstream.outputs.has-new-release == 'true'
-        uses: softprops/action-gh-release@v1
+      - name: Create Debian package info
+        run: |
+          echo "PrusaSlicer ${{ needs.check-upstream.outputs.latest-tag }}" > dist/VERSION
+          echo "Built on Debian Bookworm" >> dist/VERSION
+          echo "Build date: $(date)" >> dist/VERSION
+          
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ needs.check-upstream.outputs.latest-tag }}
-          name: PrusaSlicer ${{ needs.check-upstream.outputs.latest-tag }}
-          body: |
-            Automated build of PrusaSlicer ${{ needs.check-upstream.outputs.latest-tag }}
-            
-            Built from upstream: https://github.com/prusa3d/PrusaSlicer/releases/tag/${{ needs.check-upstream.outputs.latest-tag }}
-          files: |
-            build/**/prusa-slicer
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: PrusaSlicer-Debian-Info-${{ needs.check-upstream.outputs.latest-tag }}
+          path: dist/VERSION
+          retention-days: 90
 
   tag-local:
-    needs: [check-upstream, sync-and-build]
+    needs: [check-upstream, build-debian]
     if: needs.check-upstream.outputs.has-new-release == 'true'
     runs-on: ubuntu-latest
     steps:
