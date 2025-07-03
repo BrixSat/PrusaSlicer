@@ -108,10 +108,12 @@ jobs:
           echo "Available disk space:"
           df -h
           echo "Available memory:"
-          free -h
+          cat /proc/meminfo | head -3
           echo "=== Installing packages ==="
           export DEBIAN_FRONTEND=noninteractive
+          set -x  # Enable verbose output
           apt-get update
+          echo "=== Update completed, installing packages ==="
           apt-get install -y --no-install-recommends \
             build-essential cmake \
             libboost-dev libboost-regex-dev libboost-filesystem-dev \
