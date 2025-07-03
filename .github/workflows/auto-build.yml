@@ -120,14 +120,17 @@ jobs:
           cd deps
           mkdir build
           cd build
+          
+          # Configure with relaxed compiler warnings for gtest compatibility
+          export CXXFLAGS="-Wno-maybe-uninitialized"
+          export CFLAGS="-Wno-maybe-uninitialized"
+          
           cmake .. -DDEP_WX_GTK3=ON
           
           echo "=== Starting make with verbose output ==="
           make -j$(nproc) VERBOSE=1 || {
-            echo "=== Build failed, checking for specific errors ==="
-            echo "=== Last 100 lines of failed build ==="
-            make -j1 2>&1 | tail -100
-            exit 1
+            echo "=== Build failed, trying single-threaded ==="
+            make -j1
           }
           echo "=== Dependencies build completed ==="
           
