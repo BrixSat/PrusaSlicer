@@ -1,0 +1,149 @@
+name: Auto Build PrusaSlicer
+
+on:
+  schedule:
+    # Check for upstream changes daily at 6 AM UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Manual trigger
+  
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      has-new-release: ${{ steps.check.outputs.has-new-release }}
+      latest-tag: ${{ steps.check.outputs.latest-tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Check for new upstream releases
+        id: check
+        run: |
+          # Add upstream remote
+          git remote add upstream https://github.com/prusa3d/PrusaSlicer.git
+          git fetch upstream --tags
+          
+          # Get latest upstream tag
+          LATEST_TAG=$(git ls-remote --tags upstream | grep -E 'refs/tags/version_[0-9]' | sort -V | tail -1 | sed 's/.*refs\/tags\///')
+          echo "Latest upstream tag: $LATEST_TAG"
+          
+          # Check if we have this tag locally
+          if git tag -l | grep -q "^$LATEST_TAG$"; then
+            echo "Tag $LATEST_TAG already exists locally"
+            echo "has-new-release=false" >> $GITHUB_OUTPUT
+          else
+            echo "New tag found: $LATEST_TAG"
+            echo "has-new-release=true" >> $GITHUB_OUTPUT
+            echo "latest-tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          fi
+
+  sync-and-build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has-new-release == 'true'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            name: Linux
+            artifact-name: prusa-slicer
+          - os: windows-latest  
+            name: Windows
+            artifact-name: prusa-slicer.exe
+          - os: macos-latest
+            name: macOS
+            artifact-name: prusa-slicer
+            
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Sync with upstream
+        run: |
+          git remote add upstream https://github.com/prusa3d/PrusaSlicer.git
+          git fetch upstream --tags
+          git checkout ${{ needs.check-upstream.outputs.latest-tag }}
+          
+      - name: Setup dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake git \
+            libboost-dev libboost-regex-dev libboost-filesystem-dev \
+            libboost-thread-dev libboost-log-dev libboost-locale-dev \
+            libboost-iostreams-dev libeigen3-dev libnlopt-cxx-dev \
+            libudev-dev libopenvdb-dev libcereal-dev libtbb-dev \
+            libglu1-mesa-dev libcurl4-openssl-dev libwxgtk3.0-gtk3-dev
+            
+      - name: Setup dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install boost eigen nlopt openvdb cereal tbb curl wxwidgets
+          
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v1.1
+        
+      - name: Build PrusaSlicer
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DSLIC3R_STATIC=ON
+          cmake --build . --config Release --parallel
+          
+      - name: Find binary (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          find build -name "prusa-slicer" -type f -executable
+          
+      - name: Find binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          Get-ChildItem -Recurse build -Name "prusa-slicer.exe"
+          
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrusaSlicer-${{ matrix.name }}-${{ needs.check-upstream.outputs.latest-tag }}
+          path: |
+            build/**/prusa-slicer
+            build/**/prusa-slicer.exe
+          retention-days: 90
+          
+      - name: Create release (Linux only - avoid duplicates)
+        if: matrix.os == 'ubuntu-latest'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-upstream.outputs.latest-tag }}
+          name: PrusaSlicer ${{ needs.check-upstream.outputs.latest-tag }}
+          body: |
+            Automated build of PrusaSlicer ${{ needs.check-upstream.outputs.latest-tag }}
+            
+            Built from upstream: https://github.com/prusa3d/PrusaSlicer/releases/tag/${{ needs.check-upstream.outputs.latest-tag }}
+          files: |
+            build/**/prusa-slicer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tag-local:
+    needs: [check-upstream, sync-and-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Tag and push
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag ${{ needs.check-upstream.outputs.latest-tag }}
+          git push origin ${{ needs.check-upstream.outputs.latest-tag }}
