@@ -118,6 +118,14 @@ jobs:
         run: |
           echo "=== Building PrusaSlicer dependencies ==="
           cd deps
+          
+          # Fix Boost download URL (bintray.com is dead)
+          if [ -f deps-unix-common.cmake ]; then
+            sed -i 's|https://dl.bintray.com/boostorg/release/1.66.0/source/boost_1_66_0.tar.gz|https://boostorg.jfrog.io/artifactory/main/release/1.66.0/source/boost_1_66_0.tar.gz|g' deps-unix-common.cmake
+            # Fallback to SourceForge if JFrog doesn't work
+            sed -i 's|https://boostorg.jfrog.io/artifactory/main/release/1.66.0/source/boost_1_66_0.tar.gz|https://sourceforge.net/projects/boost/files/boost/1.66.0/boost_1_66_0.tar.gz/download|g' deps-unix-common.cmake
+          fi
+          
           mkdir build
           cd build
           
