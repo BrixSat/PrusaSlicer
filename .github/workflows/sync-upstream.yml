@@ -2,16 +2,75 @@
 name: Sync Upstream
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 9 * * *' # Daily at 9 AM UTC
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Sync upstream changes
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          
+      - name: Configure git
         run: |
-          git remote add upstream https://github.com/prusa3d/PrusaSlicer.git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+      - name: Sync upstream changes (excluding workflows)
+        run: |
+          # Add upstream remote
+          git remote add upstream https://github.com/prusa3d/PrusaSlicer.git || true
+          
+          # Fetch all upstream changes
           git fetch upstream
+          
+          # Check if there are changes to merge
+          UPSTREAM_COMMITS=$(git rev-list HEAD..upstream/main --count)
+          
+          if [ "$UPSTREAM_COMMITS" -eq "0" ]; then
+            echo "No new commits from upstream"
+            exit 0
+          fi
+          
+          echo "Found $UPSTREAM_COMMITS new commits from upstream"
+          
+          # Switch to main branch
           git checkout main
-          git merge upstream/main
-          git push
+          
+          # Merge upstream changes but exclude .github/workflows to preserve our custom workflows
+          if git merge upstream/main --no-edit --strategy-option=ours -- .github/workflows; then
+            echo "Successfully merged upstream changes (preserved our workflows)"
+            
+            # Check if there are actual changes to push
+            if git diff --cached --quiet; then
+              echo "No changes to commit after merge"
+            else
+              git push origin main
+              echo "Pushed upstream changes to fork"
+            fi
+          else
+            echo "Merge conflict detected!"
+            echo "Manual resolution required"
+            
+            # Reset to avoid leaving repo in bad state
+            git merge --abort || true
+            exit 1
+          fiSwitch to main branch
+          git checkout main
+          
+          # Merge upstream changes
+          if git merge upstream/main --no-edit; then
+            echo "Successfully merged upstream changes"
+            git push origin main
+          else
+            echo "Merge conflict detected!"
+            echo "Please resolve manually"
+            exit 1
+          fi
