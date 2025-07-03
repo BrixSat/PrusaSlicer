@@ -119,13 +119,31 @@ jobs:
           echo "=== Building PrusaSlicer dependencies ==="
           cd deps
           
-          # Fix Boost download URL (bintray.com is dead)
-          if [ -f deps-unix-common.cmake ]; then
-            sed -i 's|https://dl.bintray.com/boostorg/release/1.66.0/source/boost_1_66_0.tar.gz|https://boostorg.jfrog.io/artifactory/main/release/1.66.0/source/boost_1_66_0.tar.gz|g' deps-unix-common.cmake
-            # Fallback to SourceForge if JFrog doesn't work
-            sed -i 's|https://boostorg.jfrog.io/artifactory/main/release/1.66.0/source/boost_1_66_0.tar.gz|https://sourceforge.net/projects/boost/files/boost/1.66.0/boost_1_66_0.tar.gz/download|g' deps-unix-common.cmake
+          # Debug: Check what files contain bintray URLs
+          echo "=== Checking for bintray URLs ==="
+          grep -r "bintray.com" . || echo "No bintray URLs found"
+          
+          # Fix Boost download URL in all cmake files
+          echo "=== Fixing Boost download URLs ==="
+          find . -name "*.cmake" -exec grep -l "bintray.com" {} \; | while read file; do
+            echo "Fixing $file"
+            sed -i 's|https://dl.bintray.com/boostorg/release/1.66.0/source/boost_1_66_0.tar.gz|https://sourceforge.net/projects/boost/files/boost/1.66.0/boost_1_66_0.tar.gz/download|g' "$file"
+            echo "After fix:"
+            grep -n "boost_1_66_0" "$file" || echo "No boost URLs found"
+          done
+          
+          # Alternative: manually download boost if the above doesn't work
+          echo "=== Pre-downloading Boost as backup ==="
+          mkdir -p /tmp/boost_cache
+          cd /tmp/boost_cache
+          if ! [ -f "boost_1_66_0.tar.gz" ]; then
+            echo "Downloading Boost manually..."
+            wget -O boost_1_66_0.tar.gz "https://sourceforge.net/projects/boost/files/boost/1.66.0/boost_1_66_0.tar.gz/download" || \
+            wget -O boost_1_66_0.tar.gz "https://boostorg.jfrog.io/artifactory/main/release/1.66.0/source/boost_1_66_0.tar.gz" || \
+            echo "Manual download failed, continuing anyway"
           fi
           
+          cd /__w/PrusaSlicer/PrusaSlicer/deps
           mkdir build
           cd build
           
@@ -163,16 +181,76 @@ jobs:
           find build -name "prusa-slicer" -type f -executable -exec cp {} dist/ \;
           ls -la dist/
           
+      - name: Create AppImage
+        run: |
+          echo "=== Creating AppImage ==="
+          cd dist
+          
+          # Create AppDir structure
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
+          mkdir -p AppDir/usr/share/pixmaps
+          
+          # Copy binary
+          cp prusa-slicer AppDir/usr/bin/
+          
+          # Create desktop file
+          cat > AppDir/usr/share/applications/prusa-slicer.desktop << 'EOF'
+          [Desktop Entry]
+          Name=PrusaSlicer
+          Comment=G-code generator for 3D printers
+          Exec=prusa-slicer
+          Icon=prusa-slicer
+          Type=Application
+          Categories=Graphics;3DGraphics;Engineering;
+          MimeType=application/sla;model/stl;application/vnd.ms-3mfdocument;application/prs.wavefront-obj;application/x-amf;
+          EOF
+          
+          # Try to find and copy icon from source
+          if [ -f "../../resources/icons/PrusaSlicer.png" ]; then
+            cp ../../resources/icons/PrusaSlicer.png AppDir/usr/share/icons/hicolor/128x128/apps/prusa-slicer.png
+            cp ../../resources/icons/PrusaSlicer.png AppDir/usr/share/pixmaps/prusa-slicer.png
+          else
+            # Create a simple placeholder icon
+            echo "Creating placeholder icon..."
+            # This would be a basic text-based icon - you'd want a real PNG
+          fi
+          
+          # Download and use linuxdeploy to create AppImage
+          echo "Downloading linuxdeploy..."
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          
+          echo "Creating AppImage..."
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage --executable AppDir/usr/bin/prusa-slicer
+          
+          # Rename to include version
+          if ls *.AppImage 1> /dev/null 2>&1; then
+            for appimage in *.AppImage; do
+              mv "$appimage" "PrusaSlicer-${{ needs.check-upstream.outputs.latest-tag }}-x86_64.AppImage"
+            done
+          fi
+          
+          ls -la *.AppImage || echo "No AppImage created"
+          
       - name: Test binary
         run: |
           cd dist
           ./prusa-slicer --help || echo "Binary test completed"
           
-      - name: Upload Debian Build
+      - name: Upload Debian Build (Binary)
         uses: actions/upload-artifact@v4
         with:
-          name: PrusaSlicer-Debian-Static-${{ needs.check-upstream.outputs.latest-tag }}
+          name: PrusaSlicer-Debian-Binary-${{ needs.check-upstream.outputs.latest-tag }}
           path: dist/prusa-slicer
+          retention-days: 90
+          
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrusaSlicer-Debian-AppImage-${{ needs.check-upstream.outputs.latest-tag }}
+          path: dist/*.AppImage
           retention-days: 90
           
       - name: Create build info
