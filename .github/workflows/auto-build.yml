@@ -70,7 +70,7 @@ jobs:
 
   build-debian:
     needs: check-upstream
-    if: needs.check-upstream.outputs.should-build == 'true'
+    # if: needs.check-upstream.outputs.should-build == 'true'  # Temporarily disabled for testing
     runs-on: ubuntu-latest
     container: debian:bookworm
     
