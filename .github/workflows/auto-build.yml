@@ -132,12 +132,19 @@ jobs:
             grep -n "boost_1_66_0" "$file" || echo "No boost URLs found"
           done
           
-          # Fix OpenSSL build - use system version instead of building ancient version
-          echo "=== Skipping OpenSSL build, using system version ==="
-          if [ -f "deps-unix-common.cmake" ]; then
-            # Comment out or modify the OpenSSL dependency to skip it
-            sed -i 's|^add_subdirectory(dep_libopenssl)|# add_subdirectory(dep_libopenssl) # Using system OpenSSL|g' CMakeLists.txt || true
-            echo "OpenSSL build disabled"
+          # Fix OpenSSL build - completely remove it from CMakeLists.txt
+          echo "=== Completely disabling OpenSSL build ==="
+          if [ -f "CMakeLists.txt" ]; then
+            echo "Original CMakeLists.txt OpenSSL references:"
+            grep -n "openssl\|ssl" CMakeLists.txt || echo "No OpenSSL references found"
+            
+            # Comment out any OpenSSL-related lines
+            sed -i 's|.*dep_libopenssl.*|# &  # Disabled - using system OpenSSL|g' CMakeLists.txt
+            sed -i 's|.*OpenSSL.*|# &  # Disabled - using system OpenSSL|g' CMakeLists.txt
+            sed -i 's|.*OPENSSL.*|# &  # Disabled - using system OpenSSL|g' CMakeLists.txt
+            
+            echo "After OpenSSL removal:"
+            grep -n "openssl\|ssl\|OpenSSL\|OPENSSL" CMakeLists.txt || echo "OpenSSL successfully removed"
           fi
           
           mkdir build
@@ -147,17 +154,23 @@ jobs:
           export CXXFLAGS="-Wno-maybe-uninitialized"
           export CFLAGS="-Wno-maybe-uninitialized"
           
-          cmake .. -DDEP_WX_GTK3=ON -DDEP_OPENSSL=OFF
+          # Try without OpenSSL first
+          cmake .. -DDEP_WX_GTK3=ON -DDEP_OPENSSL=OFF || {
+            echo "=== CMake failed, trying alternative approach ==="
+            # If that fails, try to manually edit the generated files
+            cd ..
+            find . -name "*.cmake" -exec grep -l "dep_libopenssl" {} \; | while read file; do
+              echo "Removing OpenSSL from $file"
+              sed -i '/dep_libopenssl/d' "$file"
+            done
+            cd build
+            cmake .. -DDEP_WX_GTK3=ON
+          }
           
-          echo "=== Starting make with verbose output ==="
-          make -j$(nproc) VERBOSE=1 || {
-            echo "=== Build failed, trying single-threaded ==="
-            make -j1 || {
-              echo "=== Single-threaded failed, trying without OpenSSL ==="
-              cd ..
-              cmake . -DDEP_WX_GTK3=ON -DDEP_OPENSSL=OFF
-              make -j1
-            }
+          echo "=== Starting make ==="
+          make -j$(nproc) || {
+            echo "=== Parallel build failed, trying single-threaded ==="
+            make -j1
           }
           echo "=== Dependencies build completed ==="
           
