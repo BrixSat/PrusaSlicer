@@ -119,33 +119,45 @@ jobs:
           echo "=== Building PrusaSlicer dependencies ==="
           cd deps
           
-          # Debug: Check what files contain bintray URLs
-          echo "=== Checking for bintray URLs ==="
-          grep -r "bintray.com" . || echo "No bintray URLs found"
-          
           # Fix Boost download URL in all cmake files
           echo "=== Fixing Boost download URLs ==="
           find . -name "*.cmake" -exec grep -l "bintray.com" {} \; | while read file; do
             echo "Fixing $file"
             sed -i 's|https://dl.bintray.com/boostorg/release/1.66.0/source/boost_1_66_0.tar.gz|https://sourceforge.net/projects/boost/files/boost/1.66.0/boost_1_66_0.tar.gz/download|g' "$file"
-            echo "After fix:"
-            grep -n "boost_1_66_0" "$file" || echo "No boost URLs found"
           done
           
-          # Fix OpenSSL build - completely remove it from CMakeLists.txt
-          echo "=== Completely disabling OpenSSL build ==="
-          if [ -f "CMakeLists.txt" ]; then
-            echo "Original CMakeLists.txt OpenSSL references:"
-            grep -n "openssl\|ssl" CMakeLists.txt || echo "No OpenSSL references found"
-            
-            # Comment out any OpenSSL-related lines
-            sed -i 's|.*dep_libopenssl.*|# &  # Disabled - using system OpenSSL|g' CMakeLists.txt
-            sed -i 's|.*OpenSSL.*|# &  # Disabled - using system OpenSSL|g' CMakeLists.txt
-            sed -i 's|.*OPENSSL.*|# &  # Disabled - using system OpenSSL|g' CMakeLists.txt
-            
-            echo "After OpenSSL removal:"
-            grep -n "openssl\|ssl\|OpenSSL\|OPENSSL" CMakeLists.txt || echo "OpenSSL successfully removed"
-          fi
+          # Create a custom CMakeLists.txt that excludes OpenSSL
+          echo "=== Creating custom CMakeLists.txt without OpenSSL ==="
+          cp CMakeLists.txt CMakeLists.txt.backup
+          
+          cat > CMakeLists.txt << 'EOF'
+cmake_minimum_required(VERSION 3.0)
+
+project(PrusaSlicerDeps)
+
+set(DESTDIR "${CMAKE_CURRENT_BINARY_DIR}/destdir" CACHE PATH "Destination directory")
+set(DEP_CMAKE_OPTS "-DCMAKE_POSITION_INDEPENDENT_CODE=ON")
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(MAKE_EXE NAMES gmake make)
+endif ()
+
+include(deps-unix-common.cmake)
+
+add_subdirectory(dep_tbb)
+add_subdirectory(dep_gtest) 
+add_subdirectory(dep_cereal)
+add_subdirectory(dep_nlopt)
+add_subdirectory(dep_qhull)
+add_subdirectory(dep_boost)
+add_subdirectory(dep_wxwidgets)
+# add_subdirectory(dep_libopenssl)  # DISABLED - using system OpenSSL
+# add_subdirectory(dep_libcurl)     # DISABLED - using system curl
+
+EOF
+          
+          echo "=== New CMakeLists.txt created ==="
+          cat CMakeLists.txt
           
           mkdir build
           cd build
@@ -154,18 +166,7 @@ jobs:
           export CXXFLAGS="-Wno-maybe-uninitialized"
           export CFLAGS="-Wno-maybe-uninitialized"
           
-          # Try without OpenSSL first
-          cmake .. -DDEP_WX_GTK3=ON -DDEP_OPENSSL=OFF || {
-            echo "=== CMake failed, trying alternative approach ==="
-            # If that fails, try to manually edit the generated files
-            cd ..
-            find . -name "*.cmake" -exec grep -l "dep_libopenssl" {} \; | while read file; do
-              echo "Removing OpenSSL from $file"
-              sed -i '/dep_libopenssl/d' "$file"
-            done
-            cd build
-            cmake .. -DDEP_WX_GTK3=ON
-          }
+          cmake .. -DDEP_WX_GTK3=ON
           
           echo "=== Starting make ==="
           make -j$(nproc) || {
