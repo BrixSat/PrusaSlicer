@@ -111,8 +111,7 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev \
             libgtk-3-dev libgtk2.0-dev \
             pkg-config gettext curl wget \
-            ca-certificates libssl-dev \
-            perl libfile-glob-perl
+            ca-certificates libssl-dev
             
       - name: Build dependencies using PrusaSlicer deps script
         timeout-minutes: 90
